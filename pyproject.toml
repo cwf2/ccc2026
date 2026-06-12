@@ -5,6 +5,10 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "ccc2026"
 version = "0.1.0"
+authors = [
+    { name="Christopher W. Forstall", email="cforstall@mta.ca" },
+    { name="Berenice Verhelst", email="b.verhelst@uva.nl" },
+]
 dependencies = [
     "numpy",
     "pandas",
@@ -16,4 +20,4 @@ dependencies = [
 ]
 
 [tool.setuptools.packages.find]
-include = ["ccc2026*"]
+where = ["src"]
