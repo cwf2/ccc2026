@@ -3,6 +3,7 @@
 
 # import statements
 import os
+import glob
 import pandas as pd
 import numpy as np
 from matplotlib import pyplot as plt
@@ -10,6 +11,7 @@ import seaborn as sns
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
 from sklearn.linear_model import LogisticRegression
+import uva_common
 from ccc2026 import config
 
 #
@@ -17,12 +19,31 @@ from ccc2026 import config
 #
 
 
-# load tokens
-token_file = os.path.join(config.DATA_DIR, "tokens.tsv")
-tokens = pd.read_csv(token_file, delimiter="\t", dtype=str)
+# each text is archived on OSF as its own CSV under data/tokens/; download
+# the whole set if it isn't already present locally
+tokens_dir = os.path.join(config.DATA_DIR, "tokens")
+if not os.path.isdir(tokens_dir):
+    uva_common.download_all("tokens", local_dir=config.DATA_DIR)
 
-# force Triphiodorus pref to string
-tokens.loc[tokens["work"]=="Sack of Troy", "pref"] = " "
+# concatenate all per-text token tables into one corpus-wide frame
+tokens = pd.concat(
+    [pd.read_csv(f, dtype=str) for f in sorted(glob.glob(os.path.join(tokens_dir, "*.csv")))],
+    ignore_index=True,
+)
+
+# recover "pref" (book) and "line" from the urn's locus suffix: the
+# rightmost "."-separated segment is always the line number, and texts
+# with no book subdivision (e.g. Sack of Troy) get "00" rather than the
+# old " " placeholder hack
+def _split_locus(locus):
+    if "." in locus:
+        pref, line = locus.rsplit(".", 1)
+    else:
+        pref, line = "00", locus
+    return pref, line
+
+_locus = tokens["urn"].str.split(":").str[-1]
+tokens[["pref", "line"]] = pd.DataFrame(_locus.map(_split_locus).tolist(), index=tokens.index)
 
 # all work/pref combos - useful for dropdown
 all_prefs = {}

@@ -16,9 +16,9 @@ dependencies = [
     "scipy",
     "matplotlib",
     "seaborn",
-    "osfclient",
     "jupyter",
     "ipywidgets",
+    "uva_common @ git+https://github.com/cwf2/uva_common",
 ]
 
 [tool.setuptools.packages.find]
