@@ -14,18 +14,21 @@ Burns' method for comparison. See "Compare speechiness methods.ipynb".
 import numpy as np
 import pandas as pd
 
-from ccc2026 import tokens
-
-# Narratological groups - same definition used throughout the package
-nr_mask = tokens["speaker"].isna()
-sp_mask = tokens["speaker"].notna() & tokens["speaker"].ne("Odysseus-Apologue")
+import ccc2026
 
 
 def weighted_log_odds(col):
     '''Weighted log-odds ratio (speech vs. narrative) for every value of `col`,
     weighted by an uninformative Dirichlet prior (Monroe, Colaresi & Quinn 2008),
     following the same method used by Burns 2026 via the R package tidylo.
+
+    Requires ccc2026.setup() to have been called first.
     '''
+    tokens = ccc2026.tokens
+
+    # Narratological groups - same definition used throughout the package
+    nr_mask = tokens["speaker"].isna()
+    sp_mask = tokens["speaker"].notna() & tokens["speaker"].ne("Odysseus-Apologue")
 
     # explode handles both scalar columns (lemma, pos) and list columns (morph)
     exploded = tokens[col].explode().dropna()
@@ -83,7 +86,10 @@ def token_dialogism_score(lexicons):
     out-of-vocabulary); the grammatical score is the mean of the lexicon
     values for the token's POS tag and all of its morph tags. The composite
     score is the average of the two.
+
+    Requires ccc2026.setup() to have been called first.
     '''
+    tokens = ccc2026.tokens
 
     lex_lemma = lexicons["lemma"]
     lex_grammar = lexicons["grammar"]
@@ -114,7 +120,10 @@ def rolling_dialogism(score, window_size=500, min_ratio=0.7):
     window_size, min_ratio, and a speech_score DataFrame with work, pref,
     line, speech_id, and score columns) so that ccc2026.plot_rolling can be
     reused unmodified on either method's output.
+
+    Requires ccc2026.setup() to have been called first.
     '''
+    tokens = ccc2026.tokens
 
     rolled = score.rolling(
         window=window_size, center=True, min_periods=int(window_size * min_ratio)

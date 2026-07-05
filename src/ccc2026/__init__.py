@@ -12,81 +12,115 @@ from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
 from sklearn.linear_model import LogisticRegression
 import uva_common
-from ccc2026 import config
+from ccc2026.config import CONFIG
 
 #
 # data
 #
 
+# populated by setup() — everything below is None until it's been called.
+# Nothing here happens automatically on import: setup() does network access
+# (downloading from OSF) and disk writes (directories, cached files), which
+# shouldn't be side effects of a bare `import ccc2026`.
+tokens = None
+all_prefs = None
+corpus_lemma_count = None
+top_lemmas = None
+corpus_pos_count = None
+all_pos = None
+corpus_morph_count = None
+top_morph = None
+feature_count = None
 
-# each text is archived on OSF as its own CSV under data/tokens/; download
-# the whole set if it isn't already present locally
-tokens_dir = os.path.join(config.DATA_DIR, "tokens")
-if not os.path.isdir(tokens_dir):
-    uva_common.download_all("tokens", local_dir=config.DATA_DIR)
 
-# concatenate all per-text token tables into one corpus-wide frame
-tokens = pd.concat(
-    [pd.read_csv(f, dtype=str) for f in sorted(glob.glob(os.path.join(tokens_dir, "*.csv")))],
-    ignore_index=True,
-)
-
-# recover "pref" (book) and "line" from the urn's locus suffix: the
-# rightmost "."-separated segment is always the line number, and texts
-# with no book subdivision (e.g. Sack of Troy) get "00" rather than the
-# old " " placeholder hack
 def _split_locus(locus):
+    '''Split a urn's locus suffix into (pref, line).
+
+    The rightmost "."-separated segment is always the raw line number;
+    texts with no book subdivision (e.g. Sack of Troy) get "00" rather
+    than the old " " placeholder hack.
+    '''
     if "." in locus:
         pref, line = locus.rsplit(".", 1)
     else:
         pref, line = "00", locus
     return pref, line
 
-_locus = tokens["urn"].str.split(":").str[-1]
-tokens[["pref", "line"]] = pd.DataFrame(_locus.map(_split_locus).tolist(), index=tokens.index)
 
-# all work/pref combos - useful for dropdown
-all_prefs = {}
-for work in tokens["work"].unique():
-    all_prefs[work] = [pref for pref in tokens.loc[tokens["work"]==work, "pref"].unique()]
+def setup():
+    '''Ensure local directories exist, download any missing token tables
+    from OSF, and load/prepare the corpus-wide `tokens` table and derived
+    feature lists. Call this once near the top of a notebook before using
+    anything else in this package.
+    '''
+    global tokens, all_prefs
+    global corpus_lemma_count, top_lemmas, corpus_pos_count, all_pos
+    global corpus_morph_count, top_morph, feature_count
 
-#
-# feature selection
-#
+    # ensure non-version-controlled local directories exist
+    for path in [CONFIG["data_dir"], CONFIG["plot_dir"]]:
+        os.makedirs(path, exist_ok=True)
 
-# corpus-wide count for all non-punctuation lemmas, from most frequent to least
-corpus_lemma_count = tokens["lemma"].value_counts()
+    # each text is archived on OSF as its own CSV under data/tokens/; download
+    # any that aren't already present locally
+    tokens_dir = os.path.join(CONFIG["data_dir"], "tokens")
+    os.makedirs(tokens_dir, exist_ok=True)
+    for name, file in CONFIG["texts"]:
+        if not os.path.exists(os.path.join(tokens_dir, file)):
+            uva_common.download(file, node_id="tokens", local_dir=tokens_dir)
 
-# a list of the top lemmas
-top_lemmas = corpus_lemma_count.head(100).index
+    # concatenate all per-text token tables into one corpus-wide frame
+    tokens = pd.concat(
+        [pd.read_csv(f, dtype=str) for f in sorted(glob.glob(os.path.join(tokens_dir, "*.csv")))],
+        ignore_index=True,
+    )
 
-# get corpus-wide POS counts
-corpus_pos_count = tokens["pos"].value_counts()
+    # recover "pref" (book) and "line" from the urn's locus suffix
+    _locus = tokens["urn"].str.split(":").str[-1]
+    tokens[["pref", "line"]] = pd.DataFrame(_locus.map(_split_locus).tolist(), index=tokens.index)
 
-# select all pos features
-all_pos = corpus_pos_count.index
+    # all work/pref combos - useful for dropdown
+    all_prefs = {}
+    for work in tokens["work"].unique():
+        all_prefs[work] = [pref for pref in tokens.loc[tokens["work"]==work, "pref"].unique()]
 
-# melt morph column values
-morph = tokens.melt(
-        value_vars=["verbform", "mood", "tense", "voice", "person", "number", "case", "gender"],
-        ignore_index = False,
-    ).dropna()
+    #
+    # feature selection
+    #
 
-# agg morphs as list, add to token table
-tokens["morph"] = morph.groupby(morph.index).agg(morph = ("value", list))
+    # corpus-wide count for all non-punctuation lemmas, from most frequent to least
+    corpus_lemma_count = tokens["lemma"].value_counts()
 
-# get corpus wide morph counts
-corpus_morph_count = tokens["morph"].explode().value_counts()
+    # a list of the top lemmas
+    top_lemmas = corpus_lemma_count.head(100).index
 
-# select all but anomalously low
-top_morph = corpus_morph_count[corpus_morph_count > 1000].index
+    # get corpus-wide POS counts
+    corpus_pos_count = tokens["pos"].value_counts()
 
-# (truncated) feature counts bundled for export
-feature_count = {
-    "lemma": corpus_lemma_count[:100],
-    "pos": corpus_pos_count,
-    "morph": corpus_morph_count[corpus_morph_count > 1000],
-}
+    # select all pos features
+    all_pos = corpus_pos_count.index
+
+    # melt morph column values
+    morph = tokens.melt(
+            value_vars=["verbform", "mood", "tense", "voice", "person", "number", "case", "gender"],
+            ignore_index = False,
+        ).dropna()
+
+    # agg morphs as list, add to token table
+    tokens["morph"] = morph.groupby(morph.index).agg(morph = ("value", list))
+
+    # get corpus wide morph counts
+    corpus_morph_count = tokens["morph"].explode().value_counts()
+
+    # select all but anomalously low
+    top_morph = corpus_morph_count[corpus_morph_count > 1000].index
+
+    # (truncated) feature counts bundled for export
+    feature_count = {
+        "lemma": corpus_lemma_count[:100],
+        "pos": corpus_pos_count,
+        "morph": corpus_morph_count[corpus_morph_count > 1000],
+    }
 
 #
 # training
