@@ -299,14 +299,20 @@ def plot_training(training, show_decision_boundary=True):
 #
 
 def rolling_samples(training, window_size=500, min_ratio=0.7):
-    '''calculate rolling samples across the corpus'''
+    '''calculate rolling samples across the corpus, one book at a time so
+    windows don't cross book boundaries — grouping on (work, pref) together,
+    since pref alone repeats across works (e.g. Iliad and Odyssey book 1)'''
+
+    book_groups = [tokens["work"], tokens["pref"]]
 
     # how many tokens in each sample
     tokens_per_sample = (
         tokens["lemma"]
+        .groupby(book_groups)
         .rolling(window=window_size, center=True,
                  min_periods=int(window_size * min_ratio))
         .agg("count")
+        .reset_index(level=[0, 1], drop=True)
         .fillna(0)
         .astype(int)
     )
@@ -321,8 +327,10 @@ def rolling_samples(training, window_size=500, min_ratio=0.7):
             .where(lambda x: x.isin(features))
             .pipe(pd.get_dummies)
             .groupby(level=0).agg("sum")
+            .groupby(book_groups)
             .rolling(window=window_size, center=True, min_periods=int(window_size * 0.7))
             .agg("sum")
+            .reset_index(level=[0, 1], drop=True)
             .fillna(0)
             .astype(int)
         )

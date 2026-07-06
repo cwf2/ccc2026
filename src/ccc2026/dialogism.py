@@ -114,7 +114,10 @@ def token_dialogism_score(lexicons):
 
 
 def rolling_dialogism(score, window_size=500, min_ratio=0.7):
-    '''Calculate a rolling mean of the per-token dialogism score.
+    '''Calculate a rolling mean of the per-token dialogism score, one book at
+    a time so windows don't cross book boundaries — grouping on (work, pref)
+    together, since pref alone repeats across works (e.g. Iliad and Odyssey
+    book 1).
 
     Returns the same shape as ccc2026.rolling_samples's output (a dict with
     window_size, min_ratio, and a speech_score DataFrame with work, pref,
@@ -125,9 +128,15 @@ def rolling_dialogism(score, window_size=500, min_ratio=0.7):
     '''
     tokens = ccc2026.tokens
 
-    rolled = score.rolling(
-        window=window_size, center=True, min_periods=int(window_size * min_ratio)
-    ).mean().dropna()
+    book_groups = [tokens["work"], tokens["pref"]]
+    rolled = (
+        score
+        .groupby(book_groups)
+        .rolling(window=window_size, center=True, min_periods=int(window_size * min_ratio))
+        .mean()
+        .reset_index(level=[0, 1], drop=True)
+        .dropna()
+    )
 
     speech_score = pd.DataFrame(dict(
             work = tokens.loc[rolled.index, "work"],
