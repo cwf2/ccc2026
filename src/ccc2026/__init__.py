@@ -47,7 +47,7 @@ def _split_locus(locus):
     return pref, line
 
 
-def setup():
+def setup(force_download=False):
     '''Ensure local directories exist, download any missing token tables
     from OSF, and load/prepare the corpus-wide `tokens` table and derived
     feature lists. Call this once near the top of a notebook before using
@@ -66,7 +66,7 @@ def setup():
     tokens_dir = os.path.join(CONFIG["data_dir"], "tokens")
     os.makedirs(tokens_dir, exist_ok=True)
     for name, file in CONFIG["texts"]:
-        if not os.path.exists(os.path.join(tokens_dir, file)):
+        if force_download or (not os.path.exists(os.path.join(tokens_dir, file))):
             uva_common.download(file, node_id="tokens", local_dir=tokens_dir)
 
     # concatenate all per-text token tables into one corpus-wide frame
