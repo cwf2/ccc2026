@@ -58,6 +58,26 @@ def _in_line_range(line_series, first_line=None, last_line=None):
     return mask
 
 
+def _line_ticks(book, target_ticks=8):
+    '''Choose x-tick positions (token index) and labels (line number) for the
+    currently-plotted range, picking a "nice" step so both a whole book and
+    a short zoomed-in range end up with a legible, non-overlapping set of
+    ticks — a fixed step (e.g. always every 50 lines, as ccc2026.plot_rolling
+    does) leaves short ranges with few or no ticks at all.
+    '''
+    line_num = book["line"].str.extract(r"^(\d+)")[0].astype(int)
+    span = max(line_num.max() - line_num.min(), 1)
+
+    candidates = [1, 2, 5, 10, 20, 25, 50, 100, 200, 250, 500, 1000]
+    step = next((c for c in candidates if span / c <= target_ticks), candidates[-1])
+
+    is_tick = (line_num % step == 0)
+    ticks = book.loc[is_tick].copy()
+    ticks["line_num"] = line_num[is_tick]
+    ticks = ticks[~ticks["line_num"].duplicated()]
+    return ticks.index, ticks["line_num"].astype(str)
+
+
 def plot_overlay(tokens, work, pref, pca_roll, dialogism_roll, first_line=None, last_line=None,
                   min_label_frac=0.05):
     '''Z-scored overlay of the PCA and dialogism rolling scores for one book
@@ -106,7 +126,7 @@ def plot_overlay(tokens, work, pref, pca_roll, dialogism_roll, first_line=None, 
     if first_line is not None or last_line is not None:
         title += f" ({first_line if first_line is not None else 'start'}-{last_line if last_line is not None else 'end'})"
     ax.set_title(title)
-    ax.set_xlabel("token index")
+    ax.set_xlabel("line")
     ax.legend()
 
     # shade speech regions, and label wide-enough spans with their speaker
@@ -114,6 +134,11 @@ def plot_overlay(tokens, work, pref, pca_roll, dialogism_roll, first_line=None, 
         xmin, xmax = book.index.min(), book.index.max()
         total_span = max(xmax - xmin, 1)
         ymax = ax.get_ylim()[1]
+
+        tick_positions, tick_labels = _line_ticks(book)
+        ax.set_xticks(tick_positions)
+        ax.set_xticklabels(tick_labels)
+        ax.set_xlim(xmin, xmax)
 
         speech_data = book.dropna(subset=["speech_id"])
         for sid, group in speech_data.groupby("speech_id"):
