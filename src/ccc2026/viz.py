@@ -153,9 +153,25 @@ def plot_overlay(tokens, work, pref, pca_roll, dialogism_roll, first_line=None, 
     return fig
 
 
+def _excerpt_row_html(row):
+    classes = "line"
+    meta = ""
+    if pd.notna(row["speech_id"]):
+        classes += " speech"
+        if pd.notna(row["speaker"]):
+            meta = row["speaker"]
+            if pd.notna(row["addressee"]):
+                meta += f" &rarr; {row['addressee']}"
+            meta = f'<span class="meta">[{meta}]</span> '
+
+    return f'<div class="{classes}"><b>{row["line"]}</b>&nbsp;&nbsp;{meta}{row["text"]}</div>'
+
+
 def highlighted_excerpt(tokens, work, pref, first_line=None, last_line=None, display_col="display"):
     '''Build an HTML excerpt of a book (or a line range within it), one row
-    per verse line with its highlighted text.
+    per verse line with its highlighted text, speaker/addressee (if any),
+    and light shading on speech lines — matching plot_overlay's shaded
+    speech regions.
 
     Requires tokens[display_col] to already be populated, e.g. via
     build_display_column() — highlighting is corpus-wide and relatively
@@ -168,12 +184,16 @@ def highlighted_excerpt(tokens, work, pref, first_line=None, last_line=None, dis
 
     lines = book_tokens.groupby("line_id", sort=False).agg(
         line=("line", "first"),
+        speaker=("speaker", "first"),
+        addressee=("addressee", "first"),
+        speech_id=("speech_id", "first"),
         text=(display_col, " ".join),
     )
 
-    rows = "\n".join(
-        f'<div><b>{row["line"]}</b>&nbsp;&nbsp;{row["text"]}</div>'
-        for _, row in lines.iterrows()
-    )
-    style = '<style>.excerpt div { margin-bottom: 0.3em; }</style>'
+    rows = "\n".join(_excerpt_row_html(row) for _, row in lines.iterrows())
+    style = '''<style>
+    .excerpt div.line { margin-bottom: 0.3em; padding: 0.1em 0.3em; }
+    .excerpt div.line.speech { background-color: rgba(128, 128, 128, 0.15); }
+    .excerpt .meta { color: #666; font-size: 0.85em; }
+    </style>'''
     return style + f'<div class="excerpt">{rows}</div>'
