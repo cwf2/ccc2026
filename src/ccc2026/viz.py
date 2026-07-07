@@ -39,14 +39,39 @@ def build_display_column(tokens, lexicons, lemma_cutoff=0.5, grammar_cutoff=0.7,
     return display_col
 
 
-def plot_overlay(tokens, work, pref, pca_roll, dialogism_roll):
-    '''Z-scored overlay of the PCA and dialogism rolling scores for one book,
-    plotted in document order so the two methods' agreement/divergence can be
-    read against the actual sequence of the poem.
+def _in_line_range(line_series, first_line=None, last_line=None):
+    '''Boolean mask: does each raw "line" label fall within [first_line, last_line]?
+
+    Compares by the leading digit run, so letter-suffixed or compound labels
+    (e.g. "568a", or Nonnus' transposed "74_75") are treated as their leading
+    line number — fine for picking a rough passage, not meant as a precise
+    citation match.
+    '''
+    if first_line is None and last_line is None:
+        return pd.Series(True, index=line_series.index)
+    line_num = line_series.str.extract(r"^(\d+)")[0].astype(int)
+    mask = pd.Series(True, index=line_series.index)
+    if first_line is not None:
+        mask &= line_num >= first_line
+    if last_line is not None:
+        mask &= line_num <= last_line
+    return mask
+
+
+def plot_overlay(tokens, work, pref, pca_roll, dialogism_roll, first_line=None, last_line=None):
+    '''Z-scored overlay of the PCA and dialogism rolling scores for one book
+    (or a line range within it), plotted in document order so the two
+    methods' agreement/divergence can be read against the actual sequence
+    of the poem.
 
     pca_roll, dialogism_roll — rolling score Series indexed like tokens
     (e.g. from ccc2026.rolling_samples(...)["speech_score"]["score"] and
     dialogism.rolling_dialogism(...)["speech_score"]["score"])
+
+    first_line, last_line — optional; restrict the plotted range to these
+    lines. Standardization is always computed over the whole book first, so
+    a zoomed-in passage still reads relative to the book as a whole rather
+    than being re-centered on itself.
     '''
     mask = (tokens["work"] == work) & (tokens["pref"] == pref)
     idx = tokens.index[mask]
@@ -57,15 +82,47 @@ def plot_overlay(tokens, work, pref, pca_roll, dialogism_roll):
         "line": tokens.loc[idx, "line"],
     }).dropna()
 
-    # standardize both scores so they're comparable on one axis
+    # standardize both scores so they're comparable on one axis — using the
+    # whole book's stats, before any line-range restriction
     book["dialogism_z"] = (book["dialogism"] - book["dialogism"].mean()) / book["dialogism"].std()
     book["pca_z"] = (book["pca"] - book["pca"].mean()) / book["pca"].std()
+
+    book = book[_in_line_range(book["line"], first_line, last_line)]
 
     fig, ax = plt.subplots(figsize=(9, 4))
     ax.plot(book.index, book["pca_z"], label="PCA + logistic regression (standardized)")
     ax.plot(book.index, book["dialogism_z"], label="weighted log-odds dialogism (standardized)")
     ax.axhline(0, color="k", ls="--", lw=1)
-    ax.set_title(f"{work} {pref}")
+    title = f"{work} {pref}"
+    if first_line is not None or last_line is not None:
+        title += f" ({first_line if first_line is not None else 'start'}-{last_line if last_line is not None else 'end'})"
+    ax.set_title(title)
     ax.set_xlabel("token index")
     ax.legend()
     return fig
+
+
+def highlighted_excerpt(tokens, work, pref, first_line=None, last_line=None, display_col="display"):
+    '''Build an HTML excerpt of a book (or a line range within it), one row
+    per verse line with its highlighted text.
+
+    Requires tokens[display_col] to already be populated, e.g. via
+    build_display_column() — highlighting is corpus-wide and relatively
+    expensive, so it's meant to be computed once and then sliced by book/
+    range repeatedly, not recomputed per excerpt.
+    '''
+    mask = (tokens["work"] == work) & (tokens["pref"] == pref)
+    book_tokens = tokens.loc[mask]
+    book_tokens = book_tokens[_in_line_range(book_tokens["line"], first_line, last_line)]
+
+    lines = book_tokens.groupby("line_id", sort=False).agg(
+        line=("line", "first"),
+        text=(display_col, " ".join),
+    )
+
+    rows = "\n".join(
+        f'<div><b>{row["line"]}</b>&nbsp;&nbsp;{row["text"]}</div>'
+        for _, row in lines.iterrows()
+    )
+    style = '<style>.excerpt div { margin-bottom: 0.3em; }</style>'
+    return style + f'<div class="excerpt">{rows}</div>'
