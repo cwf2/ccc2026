@@ -58,11 +58,13 @@ def _in_line_range(line_series, first_line=None, last_line=None):
     return mask
 
 
-def plot_overlay(tokens, work, pref, pca_roll, dialogism_roll, first_line=None, last_line=None):
+def plot_overlay(tokens, work, pref, pca_roll, dialogism_roll, first_line=None, last_line=None,
+                  min_label_frac=0.05):
     '''Z-scored overlay of the PCA and dialogism rolling scores for one book
     (or a line range within it), plotted in document order so the two
     methods' agreement/divergence can be read against the actual sequence
-    of the poem.
+    of the poem. Speech regions are shaded; a speaker label is added to any
+    shaded span wide enough to hold readable text.
 
     pca_roll, dialogism_roll — rolling score Series indexed like tokens
     (e.g. from ccc2026.rolling_samples(...)["speech_score"]["score"] and
@@ -72,6 +74,11 @@ def plot_overlay(tokens, work, pref, pca_roll, dialogism_roll, first_line=None, 
     lines. Standardization is always computed over the whole book first, so
     a zoomed-in passage still reads relative to the book as a whole rather
     than being re-centered on itself.
+
+    min_label_frac — only label a shaded speech span with its speaker if the
+    span covers at least this fraction of the visible x-range, to avoid
+    clutter when many/short speeches are in view at once (e.g. zoomed out
+    to a whole book).
     '''
     mask = (tokens["work"] == work) & (tokens["pref"] == pref)
     idx = tokens.index[mask]
@@ -80,7 +87,9 @@ def plot_overlay(tokens, work, pref, pca_roll, dialogism_roll, first_line=None, 
         "dialogism": dialogism_roll.reindex(idx),
         "pca": pca_roll.reindex(idx),
         "line": tokens.loc[idx, "line"],
-    }).dropna()
+        "speech_id": tokens.loc[idx, "speech_id"],
+        "speaker": tokens.loc[idx, "speaker"],
+    }).dropna(subset=["dialogism", "pca"])
 
     # standardize both scores so they're comparable on one axis — using the
     # whole book's stats, before any line-range restriction
@@ -99,6 +108,23 @@ def plot_overlay(tokens, work, pref, pca_roll, dialogism_roll, first_line=None, 
     ax.set_title(title)
     ax.set_xlabel("token index")
     ax.legend()
+
+    # shade speech regions, and label wide-enough spans with their speaker
+    if len(book):
+        xmin, xmax = book.index.min(), book.index.max()
+        total_span = max(xmax - xmin, 1)
+        ymax = ax.get_ylim()[1]
+
+        speech_data = book.dropna(subset=["speech_id"])
+        for sid, group in speech_data.groupby("speech_id"):
+            lo, hi = group.index.min(), group.index.max()
+            ax.axvspan(lo, hi, alpha=0.15, color="gray", linewidth=0)
+
+            speaker = group["speaker"].iloc[0]
+            if pd.notna(speaker) and (hi - lo) / total_span >= min_label_frac:
+                ax.text((lo + hi) / 2, ymax * 0.92, speaker,
+                         ha="center", va="top", fontsize=8, clip_on=True)
+
     return fig
 
 
