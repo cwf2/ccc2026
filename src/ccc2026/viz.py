@@ -155,16 +155,23 @@ def plot_overlay(tokens, work, pref, pca_roll, dialogism_roll, first_line=None, 
 
 def _excerpt_row_html(row):
     classes = "line"
-    meta = ""
+    meta_text = ""
     if pd.notna(row["speech_id"]):
         classes += " speech"
         if pd.notna(row["speaker"]):
-            meta = row["speaker"]
+            meta_text = row["speaker"]
             if pd.notna(row["addressee"]):
-                meta += f" &rarr; {row['addressee']}"
-            meta = f'<span class="meta">[{meta}]</span> '
+                meta_text += f" &rarr; {row['addressee']}"
 
-    return f'<div class="{classes}"><b>{row["line"]}</b>&nbsp;&nbsp;{meta}{row["text"]}</div>'
+    # always emit the meta column (blank on narration rows) so the fixed
+    # width reserves the same space either way, keeping verse text flush
+    # to one left margin regardless of whether a line has an annotation
+    meta = f'<span class="meta">{meta_text}</span>'
+    return (
+        f'<div class="{classes}">{meta}'
+        f'<b class="locus">{row["line"]}</b>'
+        f'<span class="text">{row["text"]}</span></div>'
+    )
 
 
 def highlighted_excerpt(tokens, work, pref, first_line=None, last_line=None, display_col="display"):
@@ -192,8 +199,16 @@ def highlighted_excerpt(tokens, work, pref, first_line=None, last_line=None, dis
 
     rows = "\n".join(_excerpt_row_html(row) for _, row in lines.iterrows())
     style = '''<style>
-    .excerpt div.line { margin-bottom: 0.3em; padding: 0.1em 0.3em; }
+    .excerpt div.line {
+        display: flex; align-items: baseline;
+        margin-bottom: 0.3em; padding: 0.1em 0.3em;
+    }
     .excerpt div.line.speech { background-color: rgba(128, 128, 128, 0.15); }
-    .excerpt .meta { color: #666; font-size: 0.85em; }
+    .excerpt .meta {
+        flex: 0 0 12em; text-align: right; padding-right: 0.75em;
+        color: #666; font-size: 0.85em;
+    }
+    .excerpt .locus { flex: 0 0 auto; margin-right: 0.5em; }
+    .excerpt .text { flex: 1 1 auto; }
     </style>'''
     return style + f'<div class="excerpt">{rows}</div>'
