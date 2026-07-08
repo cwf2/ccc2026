@@ -94,8 +94,12 @@ def token_dialogism_score(lexicons):
     lex_lemma = lexicons["lemma"]
     lex_grammar = lexicons["grammar"]
 
-    # lexical score: lemma's lexicon value, 0 if out-of-vocabulary
-    lexical_score = tokens["lemma"].map(lex_lemma).fillna(0)
+    # lexical score: lemma's lexicon value, excluded from the composite mean
+    # (like grammar's OOV handling below) rather than filled with 0 — 0 is
+    # the most narrative-like end of the [0,1] scale, not a neutral "no
+    # signal" value, so an OOV lemma shouldn't be scored as if it were
+    # strong narrative evidence
+    lexical_score = tokens["lemma"].map(lex_lemma)
 
     # grammatical score: mean of the POS tag + all morph tags' lexicon values
     def grammar_score_for_row(pos, morph):
