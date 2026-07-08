@@ -11,6 +11,8 @@ left in place rather than repointed at this module, since they're useful as
 a record of how these were developed.
 '''
 
+import html
+
 import pandas as pd
 from matplotlib import pyplot as plt
 
@@ -19,7 +21,10 @@ def build_display_column(tokens, lexicons, lemma_cutoff=0.5, grammar_cutoff=0.7,
                           lemma_color="red", grammar_color="green"):
     '''Wrap each token's text in a colored <span> if its lemma or any of its
     grammatical features (POS + morph) exceeds the given lexicon cutoff.
-    Lemma matches take priority over grammar matches for a given token.
+    Lemma matches take priority over grammar matches for a given token, but
+    the span's title attribute always lists every matched feature (lemma and
+    grammar both), so a lemma-colored token doesn't hide a grammar match it
+    also happened to have.
 
     tokens   — a token DataFrame with "text", "lemma", "pos", and morph columns
     lexicons — a dict with "lemma" and "grammar" lexicons, e.g. from
@@ -29,13 +34,36 @@ def build_display_column(tokens, lexicons, lemma_cutoff=0.5, grammar_cutoff=0.7,
     grammar_lex = set(lexicons["grammar"].loc[lexicons["grammar"] > grammar_cutoff].index)
 
     morph_cols = ["pos", "verbform", "mood", "tense", "voice", "person", "number", "case", "gender"]
+    grammar_hits = tokens[morph_cols].isin(grammar_lex)
+    is_grammar_hit = grammar_hits.any(axis=1)
     is_lemma_hit = tokens["lemma"].isin(lemma_lex)
-    is_grammar_hit = tokens[morph_cols].isin(grammar_lex).any(axis=1)
+
+    matched_grammar = (
+        tokens[morph_cols]
+        .where(grammar_hits)
+        .apply(lambda row: [f"{col}={val}" for col, val in row.dropna().items()], axis=1)
+    )
+
+    def tooltip_for(idx):
+        parts = []
+        if is_lemma_hit.at[idx]:
+            parts.append(f"lemma={tokens.at[idx, 'lemma']}")
+        parts.extend(matched_grammar.at[idx])
+        return html.escape(", ".join(parts))
+
+    needs_tooltip = is_lemma_hit | is_grammar_hit
+    tooltip_col = pd.Series("", index=tokens.index)
+    tooltip_col.loc[needs_tooltip] = tokens.index[needs_tooltip].to_series().apply(tooltip_for)
 
     text = tokens["text"]
     display_col = text.copy()
-    display_col = display_col.where(~is_grammar_hit, f'<span style="color:{grammar_color}">' + text + "</span>")
-    display_col = display_col.where(~is_lemma_hit, f'<span style="color:{lemma_color}">' + text + "</span>")
+
+    grammar_span = f'<span style="color:{grammar_color}" title="' + tooltip_col + '">' + text + "</span>"
+    display_col = display_col.where(~is_grammar_hit, grammar_span)
+
+    lemma_span = f'<span style="color:{lemma_color}" title="' + tooltip_col + '">' + text + "</span>"
+    display_col = display_col.where(~is_lemma_hit, lemma_span)
+
     return display_col
 
 
