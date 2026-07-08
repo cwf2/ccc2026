@@ -233,6 +233,137 @@ def run_training(feature_set, sample_size=1000, seed=1):
     )
 
 
+def run_training_balanced(feature_set, sample_size=1000, seed=1, n_samples_per_group=30):
+    '''Alternative to run_training with quota (bootstrap) sampling: draws
+    exactly n_samples_per_group composite samples from every (author, class)
+    group, regardless of the group's raw token count, so every group
+    contributes equally to the PCA/logistic-regression fit.
+
+    run_training's sampling is stratified but proportional to group size —
+    each group is chopped into as many non-overlapping sample_size chunks as
+    it has tokens for, so a large group supplies far more training samples
+    than a small one (e.g. currently Dionysiaca-narrative alone supplies
+    ~19% of all composite samples, vs ~0.2% for Sack of Troy-speech). That
+    lets the largest group disproportionately shape the PCA axes and
+    decision boundary. Here, every group's sample_size tokens are drawn with
+    replacement (bootstrap) rather than partitioned, so even a group far
+    smaller than sample_size still yields n_samples_per_group full-size
+    composite samples — at the cost of correlated (non-independent) draws
+    for small groups, since they necessarily reuse tokens across samples.
+
+    Returns the same shape as run_training, so it's a drop-in for
+    rolling_samples() and plot_training().
+    '''
+    nr_mask = tokens["speaker"].isna()
+    sp_mask = tokens["speaker"].notna() & tokens["speaker"].ne("Odysseus-Apologue")
+
+    nara_group_ids = pd.Series("oth", index=tokens.index)
+    nara_group_ids[nr_mask] = "nar"
+    nara_group_ids[sp_mask] = "spk"
+
+    auth_group_ids = tokens["work"].str.slice(0, 4)
+    group_ids = auth_group_ids + "-" + nara_group_ids
+
+    rng = np.random.default_rng(seed)
+
+    # one row per (sample_label, drawn token index) — sample_size rows per
+    # sample, n_samples_per_group samples per group, built once up front so
+    # each feature class's tally below is a single vectorized merge rather
+    # than a per-sample lookup
+    draw_rows = []
+    nara_label = []
+    auth_label = []
+    sample_labels = []
+    for group in group_ids.unique():
+        auth, nara = group.split("-")
+        group_index = tokens.index[group_ids == group].to_numpy()
+        for i in range(n_samples_per_group):
+            sample_label = f"{group}-{i:03d}"
+            draw = rng.choice(group_index, size=sample_size, replace=True)
+            draw_rows.append(pd.DataFrame({"sample_label": sample_label, "token_index": draw}))
+            sample_labels.append(sample_label)
+            nara_label.append(nara)
+            auth_label.append(auth)
+    draws = pd.concat(draw_rows, ignore_index=True)
+
+    # every composite sample has exactly sample_size tokens by construction
+    tokens_per_sample = sample_size
+
+    scalers = {}
+    parts = []
+
+    for col, features in feature_set.items():
+        # one-hot encode the whole corpus's column once, exactly like
+        # rolling_samples does — dummy columns are then guaranteed to match
+        # rolling_samples's own columns in name and order, regardless of
+        # which features happen to appear in any particular bootstrap draw,
+        # so the scaler fit here stays valid for scaler.transform() later
+        dummies = (
+            tokens[col].explode().where(lambda x: x.isin(features)).pipe(pd.get_dummies)
+            .groupby(level=0).agg("sum")
+        )
+        dummies.index.name = "token_index"
+
+        # duplicate index on both sides (a token drawn more than once, a
+        # token whose morph list matched more than one feature) is handled
+        # by join's row-multiplying semantics — each duplicate draw of a
+        # token contributes that token's dummy row once per draw
+        raw = (
+            draws.join(dummies, on="token_index")
+            .drop(columns="token_index")
+            .groupby("sample_label").sum()
+            .reindex(index=sample_labels, fill_value=0)
+        )
+
+        normalized = raw.div(tokens_per_sample) * 1000
+
+        scaler = StandardScaler()
+        scaled = pd.DataFrame(
+            data = scaler.fit_transform(normalized),
+            columns = [f"{col}_{f}" for f in features],
+            index = normalized.index,
+        )
+        scalers[col] = scaler
+        parts.append(scaled)
+
+    composite = pd.concat(parts, axis=1)
+
+    pca_model = PCA(n_components=3)
+    pca = pd.DataFrame(
+        data = pca_model.fit_transform(composite),
+        columns = ["PC1", "PC2", "PC3"],
+        index = composite.index,
+    )
+
+    nara_label = pd.Series(nara_label, index=sample_labels)
+    auth_label = pd.Series(auth_label, index=sample_labels)
+
+    mask = nara_label != "oth"
+    X = pca.loc[mask.values, ["PC1", "PC2"]].values
+    y = nara_label[mask].eq("spk").astype(int).values
+    clf = LogisticRegression()
+    clf.fit(X, y)
+
+    diff = (
+            composite.loc[(nara_label == "spk").values].agg("mean") -
+            composite.loc[(nara_label == "nar").values].agg("mean")
+        ).sort_values()
+
+    return dict(
+        feature_set = feature_set,
+        sample_size = sample_size,
+        seed = seed,
+        nara_label = nara_label.values,
+        auth_label = auth_label.values,
+        scalers = scalers,
+        pca_model = pca_model,
+        scaled = scaled,
+        pca = pca,
+        clf = clf,
+        diff = diff,
+    )
+
+
 def plot_training(training, show_decision_boundary=True):
     '''plot first two principal components of training data - return figure'''
 
