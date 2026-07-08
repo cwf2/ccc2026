@@ -13,6 +13,7 @@ a record of how these were developed.
 
 import html
 
+import colorcet as cc
 import pandas as pd
 from matplotlib import pyplot as plt
 
@@ -38,9 +39,14 @@ def build_display_column(tokens, lexicons, lemma_cutoff=0.5, grammar_cutoff=0.7,
     is_grammar_hit = grammar_hits.any(axis=1)
     is_lemma_hit = tokens["lemma"].isin(lemma_lex)
 
-    matched_grammar = (
-        tokens[morph_cols]
-        .where(grammar_hits)
+    # restrict the row-wise apply to only the rows that actually have a
+    # grammar hit — over the full corpus, running it on every row (rather
+    # than just the ~20% that match) was the dominant cost by two orders
+    # of magnitude (25s vs 5s)
+    matched_grammar = pd.Series([[]] * len(tokens), index=tokens.index, dtype=object)
+    matched_grammar.loc[is_grammar_hit] = (
+        tokens.loc[is_grammar_hit, morph_cols]
+        .where(grammar_hits.loc[is_grammar_hit])
         .apply(lambda row: [f"{col}={val}" for col, val in row.dropna().items()], axis=1)
     )
 
@@ -63,6 +69,99 @@ def build_display_column(tokens, lexicons, lemma_cutoff=0.5, grammar_cutoff=0.7,
 
     lemma_span = f'<span style="color:{lemma_color}" title="' + tooltip_col + '">' + text + "</span>"
     display_col = display_col.where(~is_lemma_hit, lemma_span)
+
+    return display_col
+
+
+_MORPH_COLS = ["pos", "verbform", "mood", "tense", "voice", "person", "number", "case", "gender"]
+
+
+def top_grammar_features(lexicons, n=15):
+    '''The top N grammatical features by corpus-wide lexicon weight, ranked
+    once and meant to stay fixed regardless of what line range is in view —
+    so a feature checklist built from this doesn't reorder or lose entries
+    as the user scrolls/zooms.
+    '''
+    return list(lexicons["grammar"].sort_values(ascending=False).index[:n])
+
+
+def feature_palette(features):
+    '''Map each feature to a color, in the order given, using colorcet's
+    glasbey palette — colors are chosen to greedily maximize their distance
+    from every prior color, so the first colors assigned (i.e. the
+    highest-ranked features, if `features` comes from top_grammar_features)
+    are the most mutually distinctive, and later ones fill in progressively
+    finer distinctions. glasbey has 256 colors, far more than any realistic
+    top N here.
+    '''
+    return dict(zip(features, cc.glasbey))
+
+
+def feature_tally(tokens, features):
+    '''Count of tokens matching each feature, within whatever subset of
+    tokens is passed in (e.g. the currently-displayed line range) — meant to
+    be recomputed per range, unlike top_grammar_features's fixed ranking.
+    '''
+    counts = {feat: int((tokens[_MORPH_COLS] == feat).any(axis=1).sum()) for feat in features}
+    return pd.Series(counts)
+
+
+def build_feature_display_column(tokens, lexicons, selected_features, feature_colors,
+                                  lemma_cutoff=0.5, lemma_color="red"):
+    '''Wrap each token's text in a <span> highlighting lexical and/or checked
+    grammatical feature matches, meant to be called on a small slice of
+    tokens (e.g. one book or a zoomed line range) rather than the whole
+    corpus — see build_display_column's docstring for why the full-corpus
+    version is comparatively expensive.
+
+    Lexical matches use a foreground color (lemma_color); grammar matches use
+    background-color instead, so the two never visually conflict and a token
+    can show both at once. A token matching more than one checked feature is
+    colored by whichever comes first in selected_features (its lexicon rank),
+    but the tooltip lists every match regardless of which one "won" the color.
+
+    selected_features — ordered list of grammar feature values (e.g. from a
+        checklist built on top_grammar_features()); first in the list wins
+        ties for background color.
+    feature_colors — dict mapping each selected feature to a CSS color.
+        lemma_color should not appear among these values, since it's
+        reserved for lexical matches.
+    '''
+    lemma_lex = set(lexicons["lemma"].loc[lexicons["lemma"] > lemma_cutoff].index)
+    is_lemma_hit = tokens["lemma"].isin(lemma_lex)
+
+    bg_color = pd.Series(None, index=tokens.index, dtype=object)
+    matched_features = pd.Series([[]] * len(tokens), index=tokens.index, dtype=object)
+    for feat in selected_features:
+        hit = (tokens[_MORPH_COLS] == feat).any(axis=1)
+        matched_features.loc[hit] = matched_features.loc[hit].apply(lambda fs, feat=feat: fs + [feat])
+        still_unset = hit & bg_color.isna()
+        bg_color.loc[still_unset] = feature_colors[feat]
+
+    has_bg = bg_color.notna()
+    needs_span = has_bg | is_lemma_hit
+
+    def style_and_title(idx):
+        style_parts = []
+        title_parts = []
+        if has_bg.at[idx]:
+            style_parts.append(f"background-color:{bg_color.at[idx]}")
+        if is_lemma_hit.at[idx]:
+            style_parts.append(f"color:{lemma_color}")
+            title_parts.append(f"lemma={tokens.at[idx, 'lemma']}")
+        title_parts.extend(f"grammar={feat}" for feat in matched_features.at[idx])
+        style = html.escape("; ".join(style_parts))
+        title = html.escape(", ".join(title_parts))
+        return style, title
+
+    text = tokens["text"]
+    display_col = text.copy()
+    if needs_span.any():
+        styled = tokens.index[needs_span].to_series().apply(style_and_title)
+        style_col = styled.apply(lambda pair: pair[0])
+        title_col = styled.apply(lambda pair: pair[1])
+        span = '<span style="' + style_col + '" title="' + title_col + '">' + text.loc[needs_span] + "</span>"
+        display_col.loc[needs_span] = span
 
     return display_col
 

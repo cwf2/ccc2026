@@ -19,6 +19,7 @@ dependencies = [
     "jupyter",
     "ipywidgets",
     "openpyxl",
+    "colorcet",
     "uva_common @ git+https://github.com/cwf2/uva_common",
 ]
 
