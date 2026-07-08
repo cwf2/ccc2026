@@ -166,7 +166,7 @@ def build_feature_display_column(tokens, lexicons, selected_features, feature_co
     return display_col
 
 
-def _in_line_range(line_series, first_line=None, last_line=None):
+def in_line_range(line_series, first_line=None, last_line=None):
     '''Boolean mask: does each raw "line" label fall within [first_line, last_line]?
 
     Compares by the leading digit run, so letter-suffixed or compound labels
@@ -243,7 +243,7 @@ def plot_overlay(tokens, work, pref, pca_roll, dialogism_roll, first_line=None, 
     book["dialogism_z"] = (book["dialogism"] - book["dialogism"].mean()) / book["dialogism"].std()
     book["pca_z"] = (book["pca"] - book["pca"].mean()) / book["pca"].std()
 
-    book = book[_in_line_range(book["line"], first_line, last_line)]
+    book = book[in_line_range(book["line"], first_line, last_line)]
 
     fig, ax = plt.subplots(figsize=(9, 4))
     ax.plot(book.index, book["pca_z"], label="PCA + logistic regression (standardized)")
@@ -314,7 +314,7 @@ def highlighted_excerpt(tokens, work, pref, first_line=None, last_line=None, dis
     '''
     mask = (tokens["work"] == work) & (tokens["pref"] == pref)
     book_tokens = tokens.loc[mask]
-    book_tokens = book_tokens[_in_line_range(book_tokens["line"], first_line, last_line)]
+    book_tokens = book_tokens[in_line_range(book_tokens["line"], first_line, last_line)]
 
     lines = book_tokens.groupby("line_id", sort=False).agg(
         line=("line", "first"),
