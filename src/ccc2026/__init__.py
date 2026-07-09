@@ -126,10 +126,32 @@ def setup(force_download=False):
 # training
 #
 
-def run_training(feature_set, sample_size=1000, seed=1):
+def run_training(feature_set, sample_size=1000, seed=1, z_cap=None):
     ''' train on a feature set, return trained models
+
+    Sampling is stratified but, by default (z_cap=None), proportional to
+    each (author, class) group's raw token count — each group is chopped
+    into as many non-overlapping sample_size chunks as it has tokens for,
+    so a large group (e.g. currently Dionysiaca-narrative, ~19% of all
+    composite samples) supplies far more training samples than a small one
+    (e.g. Sack of Troy-speech, ~0.2%), letting it disproportionately shape
+    the PCA axes and decision boundary.
+
+    z_cap, if given, caps any group whose token count exceeds z_cap
+    standard deviations above the mean of the 12 real narration/speech
+    groups (the Odysseus-Apologue "oth" category is excluded from that
+    mean/sd, since it isn't used to train the classifier either, but is
+    still eligible to be capped itself if it ever became large enough to
+    qualify). Groups under the cap are unaffected — same non-overlapping
+    chunks as the uncapped default, no invented samples for small groups
+    (a group already too small to reach the cap can't be capped further;
+    there's no equivalent "floor" option, since manufacturing samples for
+    an under-represented group like Sack of Troy's 909-token speech class —
+    the entire corpus of what Triphiodorus wrote — would only produce
+    heavily-overlapping, non-independent samples that don't add real
+    information).
     '''
-    
+
     # Narratological groups
     nr_mask = tokens["speaker"].isna()
     sp_mask = tokens["speaker"].notna() & tokens["speaker"].ne("Odysseus-Apologue")
@@ -145,15 +167,32 @@ def run_training(feature_set, sample_size=1000, seed=1):
     # Combined two-factor group
     group_ids = auth_group_ids + "-" + nara_group_ids
 
+    # cap threshold, computed from the 12 real nar/spk groups only
+    cap_tokens = None
+    if z_cap is not None:
+        group_counts = group_ids.value_counts()
+        real_group_counts = group_counts[~group_counts.index.str.endswith("-oth")]
+        cap_tokens = real_group_counts.mean() + z_cap * real_group_counts.std(ddof=0)
+
     # Initialize random number generator
     rng = np.random.default_rng(seed)
 
-    # Sample labels
-    sample_ids = pd.Series(index=tokens.index)
+    # Sample labels — a group over cap_tokens only keeps a cap_tokens-sized
+    # random subset of its permutation; tokens beyond that get no chunk
+    # label (NaN) and so drop out of every downstream groupby(sample_ids)
+    sample_ids = pd.Series(index=tokens.index, dtype=object)
     for group in group_ids.unique():
-        n_toks = sum(group_ids==group)
-        sample_ids.loc[group_ids==group] = rng.permutation(n_toks) // sample_size
-    sample_ids = group_ids + "-" + sample_ids.map(lambda f: f"{int(f):03d}")
+        group_mask = group_ids == group
+        n_toks = sum(group_mask)
+        perm = rng.permutation(n_toks)
+        if cap_tokens is not None and n_toks > cap_tokens:
+            chunk_id = np.where(perm < cap_tokens, perm // sample_size, np.nan)
+        else:
+            chunk_id = perm // sample_size
+        sample_ids.loc[group_mask] = chunk_id
+    if cap_tokens is not None:
+        sample_ids = sample_ids.dropna()
+    sample_ids = group_ids.loc[sample_ids.index] + "-" + sample_ids.map(lambda f: f"{int(f):03d}")
 
     # Calculate sample sizes
     tokens_per_sample = tokens.groupby(sample_ids).size()
@@ -222,260 +261,10 @@ def run_training(feature_set, sample_size=1000, seed=1):
         feature_set = feature_set,
         sample_size = sample_size,
         seed = seed,
-        nara_label = nara_label,
-        auth_label = auth_label,
-        scalers = scalers,
-        pca_model = pca_model,
-        scaled = scaled,
-        pca = pca,
-        clf = clf,
-        diff = diff,
-    )
-
-
-def run_training_capped(feature_set, sample_size=1000, seed=1, z_cap=1.0):
-    '''Alternative to run_training that caps only the over-represented
-    (author, class) groups, rather than run_training_balanced's full
-    balancing — every group keeps its natural sample count except any group
-    whose token count is more than z_cap standard deviations above the mean
-    of the 12 real narration/speech groups (the "oth"/Apologue category is
-    excluded from that mean/sd, since it isn't used to train the classifier
-    either, but is still eligible to be capped itself if it ever became
-    large enough to qualify).
-
-    Unlike run_training_balanced, this never invents samples for
-    under-represented groups (e.g. Sack of Troy's 909-token speech group,
-    which is the entire corpus of what Triphiodorus wrote — there's no way
-    to draw more independent samples from it, so run_training_balanced's
-    bootstrap resampling there produces 30 heavily-overlapping "samples"
-    that aren't much more informative than 1). Capping only trims the
-    groups big enough to dominate the fit, and otherwise keeps
-    run_training's real, non-overlapping token chunks everywhere else.
-
-    Returns the same shape as run_training, so it's a drop-in for
-    rolling_samples()/plot_training().
-    '''
-    nr_mask = tokens["speaker"].isna()
-    sp_mask = tokens["speaker"].notna() & tokens["speaker"].ne("Odysseus-Apologue")
-
-    nara_group_ids = pd.Series("oth", index=tokens.index)
-    nara_group_ids[nr_mask] = "nar"
-    nara_group_ids[sp_mask] = "spk"
-
-    auth_group_ids = tokens["work"].str.slice(0, 4)
-    group_ids = auth_group_ids + "-" + nara_group_ids
-
-    # cap threshold computed from the 12 real nar/spk groups only
-    group_counts = group_ids.value_counts()
-    real_group_counts = group_counts[~group_counts.index.str.endswith("-oth")]
-    cap_tokens = real_group_counts.mean() + z_cap * real_group_counts.std(ddof=0)
-
-    rng = np.random.default_rng(seed)
-
-    # same permutation-based chunking as run_training, but any group over
-    # cap_tokens only keeps a cap_tokens-sized random subset of its
-    # permutation — tokens beyond that get no chunk label (NaN) and so drop
-    # out of every downstream groupby(sample_ids) automatically
-    sample_ids = pd.Series(index=tokens.index, dtype=object)
-    for group in group_ids.unique():
-        group_mask = group_ids == group
-        n_toks = sum(group_mask)
-        perm = rng.permutation(n_toks)
-        if n_toks > cap_tokens:
-            chunk_id = np.where(perm < cap_tokens, perm // sample_size, np.nan)
-        else:
-            chunk_id = perm // sample_size
-        sample_ids.loc[group_mask] = chunk_id
-    sample_ids = sample_ids.dropna()
-    sample_ids = group_ids.loc[sample_ids.index] + "-" + sample_ids.map(lambda f: f"{int(f):03d}")
-
-    tokens_per_sample = tokens.groupby(sample_ids).size()
-
-    scalers = {}
-    parts = []
-
-    for col, features in feature_set.items():
-        raw = (tokens[col]
-            .explode()
-            .where(lambda x: x.isin(features))
-            .pipe(pd.get_dummies)
-            .groupby(level=0).agg("sum")
-            .groupby(sample_ids).agg("sum")
-        )
-
-        normalized = raw.div(tokens_per_sample, axis=0) * 1000
-
-        scaler = StandardScaler()
-        scaled = pd.DataFrame(
-            data = scaler.fit_transform(normalized),
-            columns = [f"{col}_{f}" for f in features],
-            index = normalized.index,
-        )
-        scalers[col] = scaler
-        parts.append(scaled)
-
-    composite = pd.concat(parts, axis=1)
-
-    pca_model = PCA(n_components=3)
-    pca = pd.DataFrame(
-        data = pca_model.fit_transform(composite),
-        columns = ["PC1", "PC2", "PC3"],
-        index = composite.index,
-    )
-
-    mask = ~pca.index.str.contains("-oth-")
-    X = pca.loc[mask, ["PC1", "PC2"]].values
-    y = pca.index[mask].str.contains("spk").astype(int)
-    clf = LogisticRegression()
-    clf.fit(X, y)
-
-    nara_label = nara_group_ids.groupby(sample_ids).agg("first").values
-    auth_label = auth_group_ids.groupby(sample_ids).agg("first").values
-
-    diff = (
-            composite.loc[nara_label=="spk"].agg("mean") -
-            composite.loc[nara_label=="nar"].agg("mean")
-        ).sort_values()
-
-    return dict(
-        feature_set = feature_set,
-        sample_size = sample_size,
-        seed = seed,
         z_cap = z_cap,
         cap_tokens = cap_tokens,
         nara_label = nara_label,
         auth_label = auth_label,
-        scalers = scalers,
-        pca_model = pca_model,
-        scaled = scaled,
-        pca = pca,
-        clf = clf,
-        diff = diff,
-    )
-
-
-def run_training_balanced(feature_set, sample_size=1000, seed=1, n_samples_per_group=30):
-    '''Alternative to run_training with quota (bootstrap) sampling: draws
-    exactly n_samples_per_group composite samples from every (author, class)
-    group, regardless of the group's raw token count, so every group
-    contributes equally to the PCA/logistic-regression fit.
-
-    run_training's sampling is stratified but proportional to group size —
-    each group is chopped into as many non-overlapping sample_size chunks as
-    it has tokens for, so a large group supplies far more training samples
-    than a small one (e.g. currently Dionysiaca-narrative alone supplies
-    ~19% of all composite samples, vs ~0.2% for Sack of Troy-speech). That
-    lets the largest group disproportionately shape the PCA axes and
-    decision boundary. Here, every group's sample_size tokens are drawn with
-    replacement (bootstrap) rather than partitioned, so even a group far
-    smaller than sample_size still yields n_samples_per_group full-size
-    composite samples — at the cost of correlated (non-independent) draws
-    for small groups, since they necessarily reuse tokens across samples.
-
-    Returns the same shape as run_training, so it's a drop-in for
-    rolling_samples() and plot_training().
-    '''
-    nr_mask = tokens["speaker"].isna()
-    sp_mask = tokens["speaker"].notna() & tokens["speaker"].ne("Odysseus-Apologue")
-
-    nara_group_ids = pd.Series("oth", index=tokens.index)
-    nara_group_ids[nr_mask] = "nar"
-    nara_group_ids[sp_mask] = "spk"
-
-    auth_group_ids = tokens["work"].str.slice(0, 4)
-    group_ids = auth_group_ids + "-" + nara_group_ids
-
-    rng = np.random.default_rng(seed)
-
-    # one row per (sample_label, drawn token index) — sample_size rows per
-    # sample, n_samples_per_group samples per group, built once up front so
-    # each feature class's tally below is a single vectorized merge rather
-    # than a per-sample lookup
-    draw_rows = []
-    nara_label = []
-    auth_label = []
-    sample_labels = []
-    for group in group_ids.unique():
-        auth, nara = group.split("-")
-        group_index = tokens.index[group_ids == group].to_numpy()
-        for i in range(n_samples_per_group):
-            sample_label = f"{group}-{i:03d}"
-            draw = rng.choice(group_index, size=sample_size, replace=True)
-            draw_rows.append(pd.DataFrame({"sample_label": sample_label, "token_index": draw}))
-            sample_labels.append(sample_label)
-            nara_label.append(nara)
-            auth_label.append(auth)
-    draws = pd.concat(draw_rows, ignore_index=True)
-
-    # every composite sample has exactly sample_size tokens by construction
-    tokens_per_sample = sample_size
-
-    scalers = {}
-    parts = []
-
-    for col, features in feature_set.items():
-        # one-hot encode the whole corpus's column once, exactly like
-        # rolling_samples does — dummy columns are then guaranteed to match
-        # rolling_samples's own columns in name and order, regardless of
-        # which features happen to appear in any particular bootstrap draw,
-        # so the scaler fit here stays valid for scaler.transform() later
-        dummies = (
-            tokens[col].explode().where(lambda x: x.isin(features)).pipe(pd.get_dummies)
-            .groupby(level=0).agg("sum")
-        )
-        dummies.index.name = "token_index"
-
-        # duplicate index on both sides (a token drawn more than once, a
-        # token whose morph list matched more than one feature) is handled
-        # by join's row-multiplying semantics — each duplicate draw of a
-        # token contributes that token's dummy row once per draw
-        raw = (
-            draws.join(dummies, on="token_index")
-            .drop(columns="token_index")
-            .groupby("sample_label").sum()
-            .reindex(index=sample_labels, fill_value=0)
-        )
-
-        normalized = raw.div(tokens_per_sample) * 1000
-
-        scaler = StandardScaler()
-        scaled = pd.DataFrame(
-            data = scaler.fit_transform(normalized),
-            columns = [f"{col}_{f}" for f in features],
-            index = normalized.index,
-        )
-        scalers[col] = scaler
-        parts.append(scaled)
-
-    composite = pd.concat(parts, axis=1)
-
-    pca_model = PCA(n_components=3)
-    pca = pd.DataFrame(
-        data = pca_model.fit_transform(composite),
-        columns = ["PC1", "PC2", "PC3"],
-        index = composite.index,
-    )
-
-    nara_label = pd.Series(nara_label, index=sample_labels)
-    auth_label = pd.Series(auth_label, index=sample_labels)
-
-    mask = nara_label != "oth"
-    X = pca.loc[mask.values, ["PC1", "PC2"]].values
-    y = nara_label[mask].eq("spk").astype(int).values
-    clf = LogisticRegression()
-    clf.fit(X, y)
-
-    diff = (
-            composite.loc[(nara_label == "spk").values].agg("mean") -
-            composite.loc[(nara_label == "nar").values].agg("mean")
-        ).sort_values()
-
-    return dict(
-        feature_set = feature_set,
-        sample_size = sample_size,
-        seed = seed,
-        nara_label = nara_label.values,
-        auth_label = auth_label.values,
         scalers = scalers,
         pca_model = pca_model,
         scaled = scaled,
