@@ -126,10 +126,32 @@ def setup(force_download=False):
 # training
 #
 
-def run_training(feature_set, sample_size=1000, seed=1):
+def run_training(feature_set, sample_size=1000, seed=1, z_cap=None):
     ''' train on a feature set, return trained models
+
+    Sampling is stratified but, by default (z_cap=None), proportional to
+    each (author, class) group's raw token count — each group is chopped
+    into as many non-overlapping sample_size chunks as it has tokens for,
+    so a large group (e.g. currently Dionysiaca-narrative, ~19% of all
+    composite samples) supplies far more training samples than a small one
+    (e.g. Sack of Troy-speech, ~0.2%), letting it disproportionately shape
+    the PCA axes and decision boundary.
+
+    z_cap, if given, caps any group whose token count exceeds z_cap
+    standard deviations above the mean of the 12 real narration/speech
+    groups (the Odysseus-Apologue "oth" category is excluded from that
+    mean/sd, since it isn't used to train the classifier either, but is
+    still eligible to be capped itself if it ever became large enough to
+    qualify). Groups under the cap are unaffected — same non-overlapping
+    chunks as the uncapped default, no invented samples for small groups
+    (a group already too small to reach the cap can't be capped further;
+    there's no equivalent "floor" option, since manufacturing samples for
+    an under-represented group like Sack of Troy's 909-token speech class —
+    the entire corpus of what Triphiodorus wrote — would only produce
+    heavily-overlapping, non-independent samples that don't add real
+    information).
     '''
-    
+
     # Narratological groups
     nr_mask = tokens["speaker"].isna()
     sp_mask = tokens["speaker"].notna() & tokens["speaker"].ne("Odysseus-Apologue")
@@ -145,15 +167,32 @@ def run_training(feature_set, sample_size=1000, seed=1):
     # Combined two-factor group
     group_ids = auth_group_ids + "-" + nara_group_ids
 
+    # cap threshold, computed from the 12 real nar/spk groups only
+    cap_tokens = None
+    if z_cap is not None:
+        group_counts = group_ids.value_counts()
+        real_group_counts = group_counts[~group_counts.index.str.endswith("-oth")]
+        cap_tokens = real_group_counts.mean() + z_cap * real_group_counts.std(ddof=0)
+
     # Initialize random number generator
     rng = np.random.default_rng(seed)
 
-    # Sample labels
-    sample_ids = pd.Series(index=tokens.index)
+    # Sample labels — a group over cap_tokens only keeps a cap_tokens-sized
+    # random subset of its permutation; tokens beyond that get no chunk
+    # label (NaN) and so drop out of every downstream groupby(sample_ids)
+    sample_ids = pd.Series(index=tokens.index, dtype=object)
     for group in group_ids.unique():
-        n_toks = sum(group_ids==group)
-        sample_ids.loc[group_ids==group] = rng.permutation(n_toks) // sample_size
-    sample_ids = group_ids + "-" + sample_ids.map(lambda f: f"{int(f):03d}")
+        group_mask = group_ids == group
+        n_toks = sum(group_mask)
+        perm = rng.permutation(n_toks)
+        if cap_tokens is not None and n_toks > cap_tokens:
+            chunk_id = np.where(perm < cap_tokens, perm // sample_size, np.nan)
+        else:
+            chunk_id = perm // sample_size
+        sample_ids.loc[group_mask] = chunk_id
+    if cap_tokens is not None:
+        sample_ids = sample_ids.dropna()
+    sample_ids = group_ids.loc[sample_ids.index] + "-" + sample_ids.map(lambda f: f"{int(f):03d}")
 
     # Calculate sample sizes
     tokens_per_sample = tokens.groupby(sample_ids).size()
@@ -222,6 +261,8 @@ def run_training(feature_set, sample_size=1000, seed=1):
         feature_set = feature_set,
         sample_size = sample_size,
         seed = seed,
+        z_cap = z_cap,
+        cap_tokens = cap_tokens,
         nara_label = nara_label,
         auth_label = auth_label,
         scalers = scalers,
