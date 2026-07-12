@@ -126,7 +126,7 @@ def setup(force_download=False):
 # training
 #
 
-def run_training(feature_set, sample_size=1000, seed=1, z_cap=None):
+def run_training(feature_set, sample_size=1000, seed=1, z_cap=None, min_ratio=0.7):
     ''' train on a feature set, return trained models
 
     Sampling is stratified but, by default (z_cap=None), proportional to
@@ -150,6 +150,22 @@ def run_training(feature_set, sample_size=1000, seed=1, z_cap=None):
     the entire corpus of what Triphiodorus wrote — would only produce
     heavily-overlapping, non-independent samples that don't add real
     information).
+
+    Every group also has its own leftover remainder after full-size
+    chunking (n_toks % sample_size tokens). min_ratio controls what happens
+    to it: kept as one extra, undersized chunk if it's at least
+    min_ratio * sample_size tokens, dropped otherwise. A composite sample's
+    per-feature relative-frequency estimate has standard error proportional
+    to 1/sqrt(n), so an undersized chunk of ratio r has sqrt(1/r) times a
+    full sample's noise — min_ratio=0.7 (the default, matching
+    rolling_samples'/rolling_dialogism's own min_ratio) bounds that at
+    about 1.19x, i.e. roughly 20% more per-feature noise than a full-size
+    sample, which is mild enough not to meaningfully distort a PCA fit
+    dominated by hundreds of full-precision samples. min_ratio=1.0 always
+    drops the remainder (nothing below a full sample survives); a lower
+    min_ratio keeps noisier remainders, trading fidelity for keeping every
+    group represented (e.g. Sack of Troy-speech's 909-token remainder, at
+    ratio 0.909, clears any min_ratio up to that value).
     '''
 
     # Narratological groups
@@ -177,21 +193,25 @@ def run_training(feature_set, sample_size=1000, seed=1, z_cap=None):
     # Initialize random number generator
     rng = np.random.default_rng(seed)
 
-    # Sample labels — a group over cap_tokens only keeps a cap_tokens-sized
-    # random subset of its permutation; tokens beyond that get no chunk
-    # label (NaN) and so drop out of every downstream groupby(sample_ids)
+    # Sample labels. A group's usable pool is its raw token count, or
+    # cap_tokens if smaller (see above). That pool divides into
+    # n_full_chunks *full* sample_size chunks, plus a leftover remainder —
+    # kept as one extra, undersized chunk if it clears min_ratio, dropped
+    # otherwise (see min_ratio docs above). Either way, excluded tokens get
+    # no chunk label (NaN) and so drop out of every downstream
+    # groupby(sample_ids).
     sample_ids = pd.Series(index=tokens.index, dtype=object)
     for group in group_ids.unique():
         group_mask = group_ids == group
         n_toks = sum(group_mask)
         perm = rng.permutation(n_toks)
-        if cap_tokens is not None and n_toks > cap_tokens:
-            chunk_id = np.where(perm < cap_tokens, perm // sample_size, np.nan)
-        else:
-            chunk_id = perm // sample_size
+        keep_tokens = cap_tokens if (cap_tokens is not None and n_toks > cap_tokens) else n_toks
+        n_full_chunks = int(keep_tokens // sample_size)
+        remainder = keep_tokens - n_full_chunks * sample_size
+        effective_max = keep_tokens if remainder >= min_ratio * sample_size else n_full_chunks * sample_size
+        chunk_id = np.where(perm < effective_max, perm // sample_size, np.nan)
         sample_ids.loc[group_mask] = chunk_id
-    if cap_tokens is not None:
-        sample_ids = sample_ids.dropna()
+    sample_ids = sample_ids.dropna()
     sample_ids = group_ids.loc[sample_ids.index] + "-" + sample_ids.map(lambda f: f"{int(f):03d}")
 
     # Calculate sample sizes
