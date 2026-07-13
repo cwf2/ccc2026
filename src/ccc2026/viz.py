@@ -277,10 +277,10 @@ def plot_overlay(tokens, work, pref, pca_roll=None, dialogism_roll=None, first_l
     book = book[in_line_range(book["line"], first_line, last_line)]
 
     fig, ax = plt.subplots(figsize=(9, 4))
-    if dialogism_roll is not None:
-        ax.plot(book.index, book["dialogism_z"], label="weighted log-odds dialogism (standardized)")
     if pca_roll is not None:
         ax.plot(book.index, book["pca_z"], label="PCA + logistic regression (standardized)")
+    if dialogism_roll is not None:
+        ax.plot(book.index, book["dialogism_z"], label="weighted log-odds dialogism (standardized)")
     ax.axhline(0, color="k", ls="--", lw=1)
     title = f"{work} {pref}"
     if first_line is not None or last_line is not None:
@@ -293,7 +293,7 @@ def plot_overlay(tokens, work, pref, pca_roll=None, dialogism_roll=None, first_l
         # are more often read for their high values than their low ones,
         # so an in-plot legend (top or bottom corner) is more likely to
         # cover something worth looking at than the margin is
-        ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.15), ncol=2)
+        ax.legend(loc="upper right", bbox_to_anchor=(1, -0.15), ncol=2)
     if ylim is not None:
         ax.set_ylim(ylim)
 

@@ -27,7 +27,7 @@ all_prefs = None
 corpus_lemma_count = None
 top_lemmas = None
 corpus_pos_count = None
-all_pos = None
+top_pos = None
 corpus_morph_count = None
 top_morph = None
 feature_count = None
@@ -54,7 +54,7 @@ def setup(force_download=False):
     anything else in this package.
     '''
     global tokens, all_prefs
-    global corpus_lemma_count, top_lemmas, corpus_pos_count, all_pos
+    global corpus_lemma_count, top_lemmas, corpus_pos_count, top_pos
     global corpus_morph_count, top_morph, feature_count
 
     # ensure non-version-controlled local directories exist
@@ -97,8 +97,9 @@ def setup(force_download=False):
     # get corpus-wide POS counts
     corpus_pos_count = tokens["pos"].value_counts()
 
-    # select all pos features
-    all_pos = corpus_pos_count.index
+    # drop very infrequent tags
+    pos_cutoff = 100
+    top_pos = corpus_pos_count[corpus_pos_count > pos_cutoff].index
 
     # melt morph column values
     morph = tokens.melt(
@@ -117,9 +118,9 @@ def setup(force_download=False):
 
     # (truncated) feature counts bundled for export
     feature_count = {
-        "lemma": corpus_lemma_count[:100],
-        "pos": corpus_pos_count,
-        "morph": corpus_morph_count[corpus_morph_count > 1000],
+        "lemma": top_lemmas,
+        "pos": top_pos,
+        "morph": top_morph,
     }
 
 #
