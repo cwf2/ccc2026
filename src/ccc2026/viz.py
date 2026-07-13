@@ -206,7 +206,7 @@ def _line_ticks(book, target_ticks=8):
 
 
 def plot_overlay(tokens, work, pref, pca_roll=None, dialogism_roll=None, first_line=None, last_line=None,
-                  min_label_frac=0.05, ylim=None):
+                  min_label_frac=0.05, ylim=None, speech_boundaries=True):
     '''Z-scored overlay of the PCA and/or dialogism rolling scores for one
     book (or a line range within it), plotted in document order so the two
     methods' agreement/divergence can be read against the actual sequence
@@ -236,6 +236,11 @@ def plot_overlay(tokens, work, pref, pca_roll=None, dialogism_roll=None, first_l
     line, which won't match a later call that does have data — pin this to
     the same value across a build-up sequence so the axes don't jump
     between layers.
+
+    speech_boundaries — if False, suppress the gray speech-region shading
+    and speaker labels, but keep the line-number x-ticks/xlim exactly as
+    they'd be with shading on — so a "signal only" layer and a "signal +
+    boundaries" layer share identical axes, differing only in the shading.
     '''
     mask = (tokens["work"] == work) & (tokens["pref"] == pref)
     idx = tokens.index[mask]
@@ -287,7 +292,8 @@ def plot_overlay(tokens, work, pref, pca_roll=None, dialogism_roll=None, first_l
     if ylim is not None:
         ax.set_ylim(ylim)
 
-    # shade speech regions, and label wide-enough spans with their speaker
+    # line-number x-ticks always apply, regardless of speech_boundaries —
+    # only the gray shading/speaker labels below are optional
     if len(book):
         xmin, xmax = book.index.min(), book.index.max()
         total_span = max(xmax - xmin, 1)
@@ -298,15 +304,17 @@ def plot_overlay(tokens, work, pref, pca_roll=None, dialogism_roll=None, first_l
         ax.set_xticklabels(tick_labels)
         ax.set_xlim(xmin, xmax)
 
-        speech_data = book.dropna(subset=["speech_id"])
-        for sid, group in speech_data.groupby("speech_id"):
-            lo, hi = group.index.min(), group.index.max()
-            ax.axvspan(lo, hi, alpha=0.15, color="gray", linewidth=0)
+        # shade speech regions, and label wide-enough spans with their speaker
+        if speech_boundaries:
+            speech_data = book.dropna(subset=["speech_id"])
+            for sid, group in speech_data.groupby("speech_id"):
+                lo, hi = group.index.min(), group.index.max()
+                ax.axvspan(lo, hi, alpha=0.15, color="gray", linewidth=0)
 
-            speaker = group["speaker"].iloc[0]
-            if pd.notna(speaker) and (hi - lo) / total_span >= min_label_frac:
-                ax.text((lo + hi) / 2, ymax * 0.92, speaker,
-                         ha="center", va="top", fontsize=8, clip_on=True)
+                speaker = group["speaker"].iloc[0]
+                if pd.notna(speaker) and (hi - lo) / total_span >= min_label_frac:
+                    ax.text((lo + hi) / 2, ymax * 0.92, speaker,
+                             ha="center", va="top", fontsize=8, clip_on=True)
 
     return fig
 
