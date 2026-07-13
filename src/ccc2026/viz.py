@@ -288,7 +288,12 @@ def plot_overlay(tokens, work, pref, pca_roll=None, dialogism_roll=None, first_l
     ax.set_title(title)
     ax.set_xlabel("line")
     if dialogism_roll is not None or pca_roll is not None:
-        ax.legend()
+        # below the axes rather than inside — speech-boundary speaker
+        # labels sit near the top of the plot, and the metrics themselves
+        # are more often read for their high values than their low ones,
+        # so an in-plot legend (top or bottom corner) is more likely to
+        # cover something worth looking at than the margin is
+        ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.15), ncol=2)
     if ylim is not None:
         ax.set_ylim(ylim)
 
