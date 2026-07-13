@@ -205,17 +205,21 @@ def _line_ticks(book, target_ticks=8):
     return ticks.index, ticks["line_num"].astype(str)
 
 
-def plot_overlay(tokens, work, pref, pca_roll, dialogism_roll, first_line=None, last_line=None,
-                  min_label_frac=0.05):
-    '''Z-scored overlay of the PCA and dialogism rolling scores for one book
-    (or a line range within it), plotted in document order so the two
+def plot_overlay(tokens, work, pref, pca_roll=None, dialogism_roll=None, first_line=None, last_line=None,
+                  min_label_frac=0.05, ylim=None):
+    '''Z-scored overlay of the PCA and/or dialogism rolling scores for one
+    book (or a line range within it), plotted in document order so the two
     methods' agreement/divergence can be read against the actual sequence
     of the poem. Speech regions are shaded; a speaker label is added to any
     shaded span wide enough to hold readable text.
 
     pca_roll, dialogism_roll — rolling score Series indexed like tokens
     (e.g. from ccc2026.rolling_samples(...)["speech_score"]["score"] and
-    dialogism.rolling_dialogism(...)["speech_score"]["score"])
+    dialogism.rolling_dialogism(...)["speech_score"]["score"]). Pass None
+    for either one to suppress that metric and plot only the other; pass
+    None for both to render just the axes, line-number ticks, and speech-
+    boundary shading with no data lines — e.g. for building a figure up in
+    layers on a slide (axes-only, then +one metric, then +both).
 
     first_line, last_line — optional; restrict the plotted range to these
     lines. Standardization is always computed over the whole book first, so
@@ -226,35 +230,62 @@ def plot_overlay(tokens, work, pref, pca_roll, dialogism_roll, first_line=None, 
     span covers at least this fraction of the visible x-range, to avoid
     clutter when many/short speeches are in view at once (e.g. zoomed out
     to a whole book).
+
+    ylim — optional (ymin, ymax) override. With no data, the y-axis would
+    otherwise auto-scale to a tight default range around the y=0 reference
+    line, which won't match a later call that does have data — pin this to
+    the same value across a build-up sequence so the axes don't jump
+    between layers.
     '''
     mask = (tokens["work"] == work) & (tokens["pref"] == pref)
     idx = tokens.index[mask]
 
-    book = pd.DataFrame({
-        "dialogism": dialogism_roll.reindex(idx),
-        "pca": pca_roll.reindex(idx),
+    # only include a metric's column (and put it in the dropna subset) when
+    # that metric was actually requested — including a None-valued column
+    # unconditionally would broadcast to NaN for every row and make
+    # dropna(subset=[...]) drop the entire book regardless of the other
+    # metric's real data
+    data = {
         "line": tokens.loc[idx, "line"],
         "speech_id": tokens.loc[idx, "speech_id"],
         "speaker": tokens.loc[idx, "speaker"],
-    }).dropna(subset=["dialogism", "pca"])
+    }
+    dropna_cols = []
+    if dialogism_roll is not None:
+        data["dialogism"] = dialogism_roll.reindex(idx)
+        dropna_cols.append("dialogism")
+    if pca_roll is not None:
+        data["pca"] = pca_roll.reindex(idx)
+        dropna_cols.append("pca")
+
+    book = pd.DataFrame(data)
+    if dropna_cols:
+        book = book.dropna(subset=dropna_cols)
 
     # standardize both scores so they're comparable on one axis — using the
     # whole book's stats, before any line-range restriction
-    book["dialogism_z"] = (book["dialogism"] - book["dialogism"].mean()) / book["dialogism"].std()
-    book["pca_z"] = (book["pca"] - book["pca"].mean()) / book["pca"].std()
+    if dialogism_roll is not None:
+        book["dialogism_z"] = (book["dialogism"] - book["dialogism"].mean()) / book["dialogism"].std()
+    if pca_roll is not None:
+        book["pca_z"] = (book["pca"] - book["pca"].mean()) / book["pca"].std()
 
     book = book[in_line_range(book["line"], first_line, last_line)]
 
     fig, ax = plt.subplots(figsize=(9, 4))
-    ax.plot(book.index, book["pca_z"], label="PCA + logistic regression (standardized)")
-    ax.plot(book.index, book["dialogism_z"], label="weighted log-odds dialogism (standardized)")
+    if dialogism_roll is not None:
+        ax.plot(book.index, book["dialogism_z"], label="weighted log-odds dialogism (standardized)")
+    if pca_roll is not None:
+        ax.plot(book.index, book["pca_z"], label="PCA + logistic regression (standardized)")
     ax.axhline(0, color="k", ls="--", lw=1)
     title = f"{work} {pref}"
     if first_line is not None or last_line is not None:
         title += f" ({first_line if first_line is not None else 'start'}-{last_line if last_line is not None else 'end'})"
     ax.set_title(title)
     ax.set_xlabel("line")
-    ax.legend()
+    if dialogism_roll is not None or pca_roll is not None:
+        ax.legend()
+    if ylim is not None:
+        ax.set_ylim(ylim)
 
     # shade speech regions, and label wide-enough spans with their speaker
     if len(book):
