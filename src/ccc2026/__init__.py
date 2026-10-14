@@ -69,11 +69,10 @@ def setup(force_download=False):
         if force_download or (not os.path.exists(os.path.join(tokens_dir, file))):
             uva_common.download(file, node_id="tokens", local_dir=tokens_dir)
 
-    # concatenate all per-text token tables into one corpus-wide frame
-    tokens = pd.concat(
-        [pd.read_csv(f, dtype=str) for f in sorted(glob.glob(os.path.join(tokens_dir, "*.csv")))],
-        ignore_index=True,
-    )
+    # concatenate all per-text token tables into one corpus-wide frame;
+    # load_tokens() drops punctuation (reparenting head_id) if the archived
+    # tables include it, and is a no-op for tables with it already removed
+    tokens = uva_common.load_tokens(sorted(glob.glob(os.path.join(tokens_dir, "*.csv"))))
 
     # recover "pref" (book) and "line" from the urn's locus suffix
     _locus = tokens["urn"].str.split(":").str[-1]
@@ -126,6 +125,21 @@ def setup(force_download=False):
 #
 # training
 #
+
+def _feature_dummies(col, features):
+    '''One-hot indicator table for `col`'s values (exploded if list-valued),
+    restricted to `features` and with columns in exactly `features` order.
+
+    pd.get_dummies orders columns alphabetically, so without the reindex the
+    columns would be mislabeled when named from `features` (frequency order).
+    '''
+    return (
+        col.explode()
+        .where(lambda x: x.isin(features))
+        .pipe(pd.get_dummies)
+        .reindex(columns=list(features), fill_value=0)
+    )
+
 
 def run_training(feature_set, sample_size=1000, seed=1, z_cap=None, min_ratio=0.7):
     ''' train on a feature set, return trained models
@@ -227,10 +241,7 @@ def run_training(feature_set, sample_size=1000, seed=1, z_cap=None, min_ratio=0.
     for col, features in feature_set.items():
 
         # Generate feature tallies
-        raw = (tokens[col]
-            .explode()
-            .where(lambda x: x.isin(features))
-            .pipe(pd.get_dummies)
+        raw = (_feature_dummies(tokens[col], features)
             .groupby(level=0).agg("sum")
             .groupby(sample_ids).agg("sum")
         )
@@ -384,10 +395,7 @@ def rolling_samples(training, window_size=500, min_ratio=0.7):
     for col, features in training["feature_set"].items():
 
         # raw count per sample
-        raw = (tokens[col]
-            .explode()
-            .where(lambda x: x.isin(features))
-            .pipe(pd.get_dummies)
+        raw = (_feature_dummies(tokens[col], features)
             .groupby(level=0).agg("sum")
             .groupby(book_groups)
             .rolling(window=window_size, center=True, min_periods=int(window_size * 0.7))
