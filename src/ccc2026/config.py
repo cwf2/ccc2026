@@ -16,5 +16,6 @@ CONFIG = {
         ("Posthomerica", "tlg2046.tlg001.perseus-grc2.csv"),
         ("Sack of Troy", "tlg0647.tlg001.perseus-grc2.csv"),
         ("Dionysiaca", "tlg2045.tlg001.perseus-grc2.csv"),
+        ("Rape of Helen", "tlg4081.tlg001.perseus-grc2.csv"),
     ],
 }

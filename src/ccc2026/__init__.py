@@ -309,7 +309,11 @@ def run_training(feature_set, sample_size=1000, seed=1, z_cap=None, min_ratio=0.
 def plot_training(training, show_decision_boundary=True):
     '''plot first two principal components of training data - return figure'''
 
-    work_order = ["Ilia", "Odys", "Argo", "Post", "Sack", "Dion"]
+    # the paper's works in their usual order, then any others in the order
+    # they appear (a work missing from hue_order is silently dropped by seaborn)
+    usual_order = ["Ilia", "Odys", "Argo", "Post", "Sack", "Dion"]
+    present = list(dict.fromkeys(training["auth_label"]))
+    work_order = [w for w in usual_order if w in present] + [w for w in present if w not in usual_order]
     class_order = ["nar", "spk", "oth"]
 
     # plot using Seaborn
